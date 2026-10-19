@@ -24,7 +24,10 @@ function getDb() {
   return admin.firestore(admin.app('fs'));
 }
 
-const SECRET = ['roomId', 'roomPass', 'lastRoomNotifKey']; // lastRoomNotifKey me roomId|pass hota hai
+// Public URL hai, isliye ye fields list me kabhi nahi jate: room wali sab keys (roomId, roomPassword, roomDescription,
+// publishRoom, lastRoomNotifKey ...), staff ke naam/email (staffEmail, updatedBy, statusUpdatedBy ...), email aur password jaisi keys.
+// App ko sirf publishRoom/roomId/roomPass chahiye, wo bhi sirf joined users ko, aur wo seedhe Firestore se aata hai.
+const isPrivateKey = (k) => /room|staff|email|pass/i.test(k) || /By$/.test(k);
 
 // Firestore Timestamp -> ISO string (JSON me bhejne ke liye)
 const plain = (v) => {
@@ -57,7 +60,7 @@ module.exports = async (req, res) => {
       const matches = [];
       snap.forEach((d) => {
         const x = plain(d.data());
-        SECRET.forEach((k) => delete x[k]);
+        Object.keys(x).forEach((k) => { if (isPrivateKey(k)) delete x[k]; });
         matches.push({ id: d.id, ...x });
       });
       memo = { t: Date.now(), body: { ok: true, at: Date.now(), matches } };
