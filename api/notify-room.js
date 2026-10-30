@@ -71,6 +71,37 @@ module.exports = async (req, res) => {
 
   try {
     const body = req.body || {};
+
+    // ---------- ADMIN PANEL: sab users ko phone notification (topic 'all') + history ----------
+    if (body.action === 'broadcast' || body.action === 'history') {
+      const A = getApps();
+      const h = String(req.headers.authorization || '');
+      if (!h.startsWith('Bearer ')) return res.status(401).json({ error: 'no token' });
+      let dec;
+      try { dec = await A.auth.verifyIdToken(h.slice(7)); }
+      catch (e) { return res.status(401).json({ error: 'bad token' }); }
+      if (dec.admin !== true) return res.status(403).json({ error: 'not allowed' });
+
+      if (body.action === 'history') {
+        const q = await A.db.collection('pushLog').orderBy('at', 'desc').limit(50).get();
+        return res.json({ ok: true, items: q.docs.map((d) => { const x = d.data(); return { id: d.id, title: x.title || '', body: x.body || '', image: x.image || '', by: x.by || '', at: x.at && x.at.toMillis ? x.at.toMillis() : 0 }; }) });
+      }
+
+      const s2 = (v, n) => (typeof v === 'string' ? v.trim().slice(0, n) : '');
+      const title = s2(body.title, 200), text = s2(body.message, 1000);
+      let image = s2(body.image, 1000);
+      if (!title || !text) return res.status(400).json({ error: 'title and message required' });
+      if (image && !/^https?:\/\//i.test(image)) return res.status(400).json({ error: 'image link must start with http' });
+      // Sketchware wale ke jaisa hi data-only message (title, body, image, type, extra) topic "all" par
+      const id = await A.messaging.send({
+        topic: 'all',
+        data: { title, body: text, image: image || '', type: 'chat', extra: '' },
+        android: { priority: 'high' },
+      });
+      await A.db.collection('pushLog').add({ title, body: text, image, by: dec.email || dec.uid || '', at: new Date(), fcmId: String(id) });
+      return res.json({ ok: true, id });
+    }
+
     const { matchId } = body;
     if (!matchId) return res.status(400).json({ error: 'matchId required' });
 
