@@ -73,7 +73,7 @@ module.exports = async (req, res) => {
     const body = req.body || {};
 
     // ---------- ADMIN PANEL: sab users ko phone notification (topic 'all') + history ----------
-    if (body.action === 'broadcast' || body.action === 'history') {
+    if (body.action === 'broadcast' || body.action === 'history' || body.action === 'history_delete') {
       const A = getApps();
       const h = String(req.headers.authorization || '');
       if (!h.startsWith('Bearer ')) return res.status(401).json({ error: 'no token' });
@@ -82,6 +82,12 @@ module.exports = async (req, res) => {
       catch (e) { return res.status(401).json({ error: 'bad token' }); }
       if (dec.admin !== true) return res.status(403).json({ error: 'not allowed' });
 
+      if (body.action === 'history_delete') {
+        const did = typeof body.id === 'string' ? body.id : '';
+        if (!did || did.indexOf('/') >= 0) return res.status(400).json({ error: 'id required' });
+        await A.db.collection('pushLog').doc(did).delete();
+        return res.json({ ok: true });
+      }
       if (body.action === 'history') {
         const q = await A.db.collection('pushLog').orderBy('at', 'desc').limit(50).get();
         return res.json({ ok: true, items: q.docs.map((d) => { const x = d.data(); return { id: d.id, title: x.title || '', body: x.body || '', image: x.image || '', by: x.by || '', at: x.at && x.at.toMillis ? x.at.toMillis() : 0 }; }) });
