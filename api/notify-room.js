@@ -118,7 +118,7 @@ module.exports = async (req, res) => {
     }
 
     // ---------- ADMIN PANEL: sab users ko phone notification (topic 'all') + history ----------
-    if (['broadcast', 'history', 'history_delete', 'schedule_add', 'schedule_list', 'schedule_cancel'].includes(body.action)) {
+    if (['broadcast', 'history', 'history_delete', 'schedule_add', 'schedule_list', 'schedule_cancel', 'schedule_delete'].includes(body.action)) {
       const A = getApps();
       const h = String(req.headers.authorization || '');
       if (!h.startsWith('Bearer ')) return res.status(401).json({ error: 'no token' });
@@ -138,6 +138,13 @@ module.exports = async (req, res) => {
         const ref = A.db.collection('pushSchedule').doc(cid);
         const okc = await A.db.runTransaction(async (t) => { const c = await t.get(ref); if (!c.exists || c.data().status !== 'pending') return false; t.delete(ref); return true; });
         return okc ? res.json({ ok: true }) : res.status(409).json({ error: 'Ye ab cancel nahi ho sakti (bhej di gayi ya nahi mili)' });
+      }
+      if (body.action === 'schedule_delete') {
+        const xid = typeof body.id === 'string' ? body.id : '';
+        if (!xid || xid.indexOf('/') >= 0) return res.status(400).json({ error: 'id required' });
+        const xref = A.db.collection('pushSchedule').doc(xid);
+        const okx = await A.db.runTransaction(async (t) => { const c = await t.get(xref); if (!c.exists || c.data().status === 'sending') return false; t.delete(xref); return true; });
+        return okx ? res.json({ ok: true }) : res.status(409).json({ error: 'Abhi delete nahi ho sakti, thodi der baad try karein' });
       }
       if (body.action === 'schedule_add') {
         const st = s3(body.title, 200), sm = s3(body.message, 1000); let si = s3(body.image, 1000);
