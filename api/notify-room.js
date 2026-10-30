@@ -61,6 +61,41 @@ async function sendToUsers(db, messaging, ids, name) {
   return { ok: true, sent };
 }
 
+
+// Sab users ko (topic 'all') data-only push -- Sketchware wale jaisa
+async function sendAll(A, title, text, image, by) {
+  const id = await A.messaging.send({
+    topic: 'all',
+    data: { title, body: text, image: image || '', type: 'chat', extra: '' },
+    android: { priority: 'high' },
+  });
+  await A.db.collection('pushLog').add({ title, body: text, image: image || '', by: by || '', at: new Date(), fcmId: String(id) });
+  return String(id);
+}
+// Time ho chuki scheduled notifications bhejo (cron-job.org har minute bulata hai)
+async function runDue(A) {
+  const col = A.db.collection('pushSchedule');
+  const q = await col.where('status', '==', 'pending').limit(200).get();
+  const now = Date.now(); let sent = 0, failed = 0;
+  for (const d of q.docs) {
+    const x = d.data(); const at = x.at && x.at.toMillis ? x.at.toMillis() : 0;
+    if (!at || at > now) continue;
+    const got = await A.db.runTransaction(async (t) => {
+      const c = await t.get(d.ref);
+      if (!c.exists || c.data().status !== 'pending') return false;
+      t.update(d.ref, { status: 'sending' }); return true;
+    });
+    if (!got) continue;
+    try {
+      const fid = await sendAll(A, x.title, x.body, x.image, x.by);
+      await d.ref.update({ status: 'sent', sentAt: new Date(), fcmId: fid }); sent++;
+    } catch (e) {
+      await d.ref.update({ status: 'failed', error: String((e && e.message) || e).slice(0, 300) }); failed++;
+    }
+  }
+  return { ok: true, sent, failed };
+}
+
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -72,8 +107,18 @@ module.exports = async (req, res) => {
   try {
     const body = req.body || {};
 
+    // ---------- CRON: time ho chuki scheduled notifications bhejna (CRON_SECRET se) ----------
+    if (body.action === 'run_due') {
+      const want = String(process.env.CRON_SECRET || '');
+      const got = String(req.headers['x-cron-secret'] || body.secret || '');
+      const crypto = require('crypto');
+      const ok = want.length >= 8 && got.length === want.length && crypto.timingSafeEqual(Buffer.from(got), Buffer.from(want));
+      if (!ok) return res.status(401).json({ error: 'bad secret' });
+      return res.json(await runDue(getApps()));
+    }
+
     // ---------- ADMIN PANEL: sab users ko phone notification (topic 'all') + history ----------
-    if (body.action === 'broadcast' || body.action === 'history' || body.action === 'history_delete') {
+    if (['broadcast', 'history', 'history_delete', 'schedule_add', 'schedule_list', 'schedule_cancel'].includes(body.action)) {
       const A = getApps();
       const h = String(req.headers.authorization || '');
       if (!h.startsWith('Bearer ')) return res.status(401).json({ error: 'no token' });
@@ -82,6 +127,27 @@ module.exports = async (req, res) => {
       catch (e) { return res.status(401).json({ error: 'bad token' }); }
       if (dec.admin !== true) return res.status(403).json({ error: 'not allowed' });
 
+      const s3 = (v, n) => (typeof v === 'string' ? v.trim().slice(0, n) : '');
+      if (body.action === 'schedule_list') {
+        const q = await A.db.collection('pushSchedule').orderBy('at', 'desc').limit(50).get();
+        return res.json({ ok: true, items: q.docs.map((d) => { const x = d.data(); return { id: d.id, title: x.title || '', body: x.body || '', image: x.image || '', status: x.status || '', error: x.error || '', at: x.at && x.at.toMillis ? x.at.toMillis() : 0 }; }) });
+      }
+      if (body.action === 'schedule_cancel') {
+        const cid = typeof body.id === 'string' ? body.id : '';
+        if (!cid || cid.indexOf('/') >= 0) return res.status(400).json({ error: 'id required' });
+        const ref = A.db.collection('pushSchedule').doc(cid);
+        const okc = await A.db.runTransaction(async (t) => { const c = await t.get(ref); if (!c.exists || c.data().status !== 'pending') return false; t.delete(ref); return true; });
+        return okc ? res.json({ ok: true }) : res.status(409).json({ error: 'Ye ab cancel nahi ho sakti (bhej di gayi ya nahi mili)' });
+      }
+      if (body.action === 'schedule_add') {
+        const st = s3(body.title, 200), sm = s3(body.message, 1000); let si = s3(body.image, 1000);
+        const sat = Number(body.at);
+        if (!st || !sm) return res.status(400).json({ error: 'title and message required' });
+        if (si && !/^https?:\/\//i.test(si)) return res.status(400).json({ error: 'image link must start with http' });
+        if (!Number.isFinite(sat) || sat < Date.now() - 60000 || sat > Date.now() + 366 * 86400000) return res.status(400).json({ error: 'Time aage ka hona chahiye (1 saal ke andar)' });
+        const r = await A.db.collection('pushSchedule').add({ title: st, body: sm, image: si, at: new Date(sat), status: 'pending', by: dec.email || dec.uid || '', createdAt: new Date() });
+        return res.json({ ok: true, id: r.id });
+      }
       if (body.action === 'history_delete') {
         const did = typeof body.id === 'string' ? body.id : '';
         if (!did || did.indexOf('/') >= 0) return res.status(400).json({ error: 'id required' });
