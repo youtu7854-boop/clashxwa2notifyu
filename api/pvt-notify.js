@@ -49,8 +49,10 @@ module.exports = async (req, res) => {
     const t = await r.json();
     if (!t || !t.toUid) return res.json({ ok: true, sent: 0, reason: 'nothing to send' });
 
-    const doc = await db.collection('users').doc(String(t.toUid)).get();
-    const fcm = doc.exists && doc.data().fcmToken;
+    // Token pehle Supabase se (t.fcm) -> Firebase read nahi lagta. Na mile to purana tareeka (Firestore) fallback.
+    let fcm = t.fcm || '';
+    const fromSb = !!fcm;
+    if (!fcm) { const doc = await db.collection('users').doc(String(t.toUid)).get(); fcm = doc.exists && doc.data().fcmToken; }
     if (!fcm) return res.json({ ok: true, sent: 0, reason: 'No token' });
 
     try {
@@ -62,7 +64,7 @@ module.exports = async (req, res) => {
       });
     } catch (e) {
       const code = (e && e.code) || '';
-      if (/registration-token-not-registered|invalid-registration-token/.test(code)) {
+      if (!fromSb && /registration-token-not-registered|invalid-registration-token/.test(code)) {
         await db.collection('users').doc(String(t.toUid)).update({ fcmToken: admin.firestore.FieldValue.delete() }).catch(() => {});
       }
       return res.json({ ok: true, sent: 0 });
