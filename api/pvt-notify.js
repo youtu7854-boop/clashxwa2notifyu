@@ -34,12 +34,13 @@ module.exports = async (req, res) => {
     if (!h.startsWith('Bearer ')) return res.status(401).json({ error: 'no token' });
     const token = h.slice(7);
     const id = req.body && typeof req.body.challengeId === 'string' ? req.body.challengeId.slice(0, 80) : '';
+    const isAccept = !!(req.body && req.body.type === 'accept');
     if (!id) return res.status(400).json({ error: 'challengeId required' });
 
     const { db, auth, messaging } = getApps();
     try { await auth.verifyIdToken(token); } catch (e) { return res.status(401).json({ error: 'bad token' }); }
 
-    const r = await fetch(SB_URL + '/rest/v1/rpc/pvt_chat_notify', {
+    const r = await fetch(SB_URL + '/rest/v1/rpc/' + (isAccept ? 'pvt_accept_notify' : 'pvt_chat_notify'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', apikey: SB_ANON, Authorization: 'Bearer ' + token },
       body: JSON.stringify({ p_id: id }),
@@ -56,7 +57,7 @@ module.exports = async (req, res) => {
       await messaging.send({
         token: fcm,
         // Data-only (NotifyService.java notification banata hai), pichhli Room ID wali notification jaisa
-        data: { title: String(t.name), body: String(t.msg), type: 'chat', extra: '' },
+        data: { title: String(isAccept ? t.title : t.name), body: String(t.msg), type: 'chat', extra: '' },
         android: { priority: 'high' },
       });
     } catch (e) {
